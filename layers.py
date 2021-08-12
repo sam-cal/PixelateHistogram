@@ -7,41 +7,114 @@ import numpy as np
 
 
 class PixelateLayer(Layer):
-  """The Layer implement the following activation, with 1/stepSize+1 output neurons per input neuron.
+  """The Layer implement the following activation, with 1+1/stepSize output neurons per input neuron.
 
 For the output neuron i, and the input x:
 
-  `f_i(x) = 0`                          for                x/Ntot<(i-1)*stepSize,
-  `f_i(x) = relu(x)/x,			for (i-1)*stepSize<x/Ntot<    i*stepSize
-  `f_i(x) = relu(x)/x,			for     i*stepSize<x/Ntot<(i+1)*stepSize
-  `f_i(x) = 0`                          for (i+1)*stepSize<x/Ntot
+  `f_i(x) = 0`                                  for                x/Ntot<(i-1)*stepSize,
+  `f_i(x) = [x/Ntot - (i-1)*stepSize]/stepSize,	for (i-1)*stepSize<x/Ntot<    i*stepSize
+  `f_i(x) = [(i+1)*stepSize-x/Ntot]/stepSize,	for     i*stepSize<x/Ntot<(i+1)*stepSize
+  `f_i(x) = 0`                          	for (i+1)*stepSize<x/Ntot
 with Ntot = sum of inputs neurons.
   ```
   Usage:
-from layers import *
-layer = PixelateLayer()
-tensor = tf.constant([range(10, 12)], dtype=tf.float32)
-output = layer(tensor)
-output.numpy()
--> array([[[0.        , 0.        , 0.        , 0.        , 0.        ,
-         0.18350339, 0.43305337, 0.6464468 , 0.8333334 ],
-        [0.        , 0.        , 0.        , 0.        , 0.        ,
-         0.        , 0.24407113, 0.46967006, 0.6666666 ]]], dtype=float32)
+
+     from PixelateHistogram.layers import *
+     #Very simple histogram passing trough 1-layer PixelateLayer
+     histo_1 = tf.constant([[[1000], [0], [0]]]) #only the first bin is filled
+     PL1 = PixelateLayer(stepSize=0.1, flatten=False)
+     pixels =PL1(histo_1)
+     ->
+     tf.Tensor(
+[[[[0.]
+   [0.]
+   [0.]
+   [0.]
+   [0.]
+   [0.]
+   [0.]
+   [0.]
+   [0.]
+   [0.]
+   [1.]]
+   
+  [[1.]
+   [0.]
+   [0.]
+   [0.]
+   [0.]
+   [0.]
+   [0.]
+   [0.]
+   [0.]
+   [0.]
+   [0.]]
+
+  [[1.]
+   [0.]
+   [0.]
+   [0.]
+   [0.]
+   [0.]
+   [0.]
+   [0.]
+   [0.]
+   [0.]
+   [0.]]]], shape=(1, 3, 11, 1), dtype=float32)
+
+   #Very simple histogram passing trough 3-layer PixelateLayer (additional layers to account for statistical uncertainty
+   histo_2 = tf.constant([[[1000], [100], [100]]])
+   PL2 = PixelateLayer(stepSize=0.1, n_sigma=1, flatten=False)
+   ->
+tf.Tensor(
+[[[[0.         0.         0.        ]
+   [0.         0.         0.        ]
+   [0.         0.         0.        ]
+   [0.         0.         0.        ]
+   [0.         0.         0.        ]
+   [0.         0.         0.        ]
+   [0.         0.         0.        ]
+   [0.         0.         0.        ]
+   [0.9301901  0.66666675 0.4031433 ]
+   [0.06981003 0.33333337 0.5968567 ]
+   [0.         0.         0.        ]]
+
+  [[0.25       0.16666663 0.08333337]
+   [0.75       0.83333325 0.91666675]
+   [0.         0.         0.        ]
+   [0.         0.         0.        ]
+   [0.         0.         0.        ]
+   [0.         0.         0.        ]
+   [0.         0.         0.        ]
+   [0.         0.         0.        ]
+   [0.         0.         0.        ]
+   [0.         0.         0.        ]
+   [0.         0.         0.        ]]
+
+  [[0.25       0.16666663 0.08333337]
+   [0.75       0.83333325 0.91666675]
+   [0.         0.         0.        ]
+   [0.         0.         0.        ]
+   [0.         0.         0.        ]
+   [0.         0.         0.        ]
+   [0.         0.         0.        ]
+   [0.         0.         0.        ]
+   [0.         0.         0.        ]
+   [0.         0.         0.        ]
+   [0.         0.         0.        ]]]], shape=(1, 3, 11, 3), dtype=float32)
+
+  More examples in https://github.com/sam-cal/PixelateHistogramExample
+
   Input shape:
     Arbitrary.
   Output shape:
-    Shape as the (input, (maxValue-minValue)/stepSize).
+    Shape as the (input, 1+1/stepSize, 1+2*n_sigma). It can be changed using 'flatten' option
   Arguments:
-      minValue: float. Mininmal value form `mean`
-      maxValue: float. Maxinmal value form `mean`
-      stepSize: float. Step size to go from minValue to maxValue
-      heigh: float. Heigh of the triangle
-  Activations with generated with the following parameters:
-      mean: A scalar, "center" of the triangle.
-      width: float. Width of the triangle. By default = 3*sqrt(mean).
-      heigh: float. Heigh of the triangle
-      
-       v5: input value expressed as the barycenter of the 2 closest values
+      stepSize: float. Step size to go from 0 to 1
+      n_sigma:  integer. If non-0, the ouput will have an additional 
+                dimension, that relects the statistical uncertainty.
+		One input x is transformed into [f_i(x-n_sigma*sqrt(x)), f_i(x-(n_sigma-1)*sqrt(x)), ... ,f_i(x), ..., f_i(x+n_sigma*sqrt(x))]
+      flatten: if true, the output shape is (input * (1+1/stepSize) * (1+2*n_sigma)).
   """
 
   def __init__(self, stepSize=0.01, n_sigma=0, flatten=False, **kwargs):
@@ -118,17 +191,22 @@ class PoissonianNoise(Layer):
   
   This is useful to mitigate overfitting
   (you could see it as a form of random data augmentation).
+  
   Poissonian Noise is a natural choice as corruption process
   for counting experiment.
+  
   As it is a regularization layer, it is only active at training time.
+  
   Call arguments:
     inputs: Input tensor (of any rank).
     training: Python boolean indicating whether the layer should behave in
       training mode (adding noise) or in inference mode (doing nothing).
+  
   Input shape:
     Arbitrary. Use the keyword argument `input_shape`
     (tuple of integers, does not include the samples axis)
     when using this layer as the first layer in a model.
+  
   Output shape:
     Same shape as input.
   """
@@ -137,12 +215,12 @@ class PoissonianNoise(Layer):
     super(PoissonianNoise, self).__init__(**kwargs)
     #self.supports_masking = True
     
-  def call(self, inputs):
+  def call(self, inputs, training=None):
 
     def noised():
       return tf.squeeze( tf.random.poisson(shape=(1,), lam=inputs, dtype=inputs.dtype) , axis=[0])
     
-    return K.in_train_phase(noised, inputs)
+    return K.in_train_phase(noised, inputs, training=training)
 
   def get_config(self):
     base_config = super(PoissonianNoise, self).get_config()
