@@ -119,7 +119,7 @@ tf.Tensor(
       flatten: if true, the output shape is (input * (1+1/stepSize) * (1+2*n_sigma)).
   """
 
-  def __init__(self, stepSize=0.01, n_sigma=0, flatten=False, **kwargs):
+  def __init__(self, stepSize=0.01, n_sigma=0, flatten=False, minimum=0., maximum=1., **kwargs):
     super(PixelateLayer, self).__init__(dynamic=True, **kwargs)
     self.stepSize = stepSize
     self.n_sigma = n_sigma
@@ -127,10 +127,10 @@ tf.Tensor(
     self.built = True
     
     self.sigmas = self.getSigmas()
-    self.steps = self.getSteps()
-  
-  def getSteps(self):
-     return np.float32(np.arange(0.,1.+self.stepSize, self.stepSize)[:])
+    self.steps = self.getSteps(minimum, maximum)
+    
+  def getSteps(self, mini, maxi):
+     return np.float32(np.arange(mini,maxi+self.stepSize, self.stepSize)[:])
   def getSigmas(self):
      return np.arange(-self.n_sigma, self.n_sigma+1 )
 
