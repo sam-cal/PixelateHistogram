@@ -4,6 +4,8 @@ from tensorflow.python.keras.utils import tf_utils
 from tensorflow.python.framework import tensor_shape
 import tensorflow as tf
 import numpy as np
+import time
+#tf.config.experimental.enable_mlir_graph_optimization()
 
 
 class PixelateLayer(Layer):
@@ -12,9 +14,9 @@ class PixelateLayer(Layer):
 For the output neuron i, and the input x:
 
   `f_i(x) = 0`                                  for                x/Ntot<(i-1)*stepSize,
-  `f_i(x) = [x/Ntot - (i-1)*stepSize]/stepSize,	for (i-1)*stepSize<x/Ntot<    i*stepSize
-  `f_i(x) = [(i+1)*stepSize-x/Ntot]/stepSize,	for     i*stepSize<x/Ntot<(i+1)*stepSize
-  `f_i(x) = 0`                          	for (i+1)*stepSize<x/Ntot
+  `f_i(x) = [x/Ntot - (i-1)*stepSize]/stepSize,        for (i-1)*stepSize<x/Ntot<    i*stepSize
+  `f_i(x) = [(i+1)*stepSize-x/Ntot]/stepSize,        for     i*stepSize<x/Ntot<(i+1)*stepSize
+  `f_i(x) = 0`                                  for (i+1)*stepSize<x/Ntot
 with Ntot = sum of inputs neurons.
   ```
   Usage:
@@ -113,7 +115,7 @@ tf.Tensor(
       stepSize: float. Step size to go from 0 to 1
       n_sigma:  integer. If non-0, the ouput will have an additional 
                 dimension, that relects the statistical uncertainty.
-		One input x is transformed into [f_i(x-n_sigma*sqrt(x)), f_i(x-(n_sigma-1)*sqrt(x)), ... ,f_i(x), ..., f_i(x+n_sigma*sqrt(x))]
+                One input x is transformed into [f_i(x-n_sigma*sqrt(x)), f_i(x-(n_sigma-1)*sqrt(x)), ... ,f_i(x), ..., f_i(x+n_sigma*sqrt(x))]
       flatten: if true, the output shape is (input * (1+1/stepSize) * (1+2*n_sigma)).
   """
 
@@ -131,35 +133,53 @@ tf.Tensor(
      return np.float32(np.arange(0.,1.+self.stepSize, self.stepSize)[:])
   def getSigmas(self):
      return np.arange(-self.n_sigma, self.n_sigma+1 )
+
+  @tf.function
+  def getMeanWidth(self,x):
+    mean  = K.sum(x, axis=1)
+    mean  =  tf.tensordot(mean, self.steps, axes=0) # transform fraction into number of events
+    width =  mean[:,:,1:]-mean[:,:,:-1]
+    width =tf.concat([width,tf.expand_dims(width[:,:,0], axis=-1)], axis=-1)
+    return mean,width
+
+  @tf.function
+  def buildResult(self,x, mean, width):
   
+    for sss in self.sigmas:
+    
+        SQRT= sss*tf.sqrt(x)
+        
+        XmMEANpWIDTH =  x + SQRT -mean +width
+        MEANpWIDTHmX = -x - SQRT +mean +width
+        
+        XmMEANpWIDTH = tf.clip_by_value(XmMEANpWIDTH, clip_value_min=0, clip_value_max=width) / width
+        MEANpWIDTHmX = tf.clip_by_value(MEANpWIDTHmX, clip_value_min=0, clip_value_max=width) / width
+        
+        RESULT_temp = (XmMEANpWIDTH + MEANpWIDTHmX) - 1
+
+        if sss == self.sigmas[0]:
+           RESULT = tf.expand_dims(RESULT_temp, axis=-1)
+        else:
+           RESULT = tf.concat([RESULT, tf.expand_dims(RESULT_temp, axis=-1)], axis=-1)
+        
+    return RESULT
+        
+  #@tf.function
   def call(self, inputs):    
     if not self.built: self.build(inputs.shape)
     
     x = K.cast_to_floatx(inputs)
-    mean  = K.sum(x, axis=1)
-    mean  =  tf.tensordot(mean, self.steps, axes=0) # transform fraction into number of events
-    width =  mean[:,:,1:]-mean[:,:,:-1]
-    width =np.dstack((np.expand_dims(width[:,:,0], axis=-1),width))
-    List = []
-    for sss in self.sigmas:
-    
-        XmMEANpWIDTH =  x + sss*tf.sqrt(x) -mean +width
-        MEANpWIDTHmX = -x - sss*tf.sqrt(x) +mean +width
-        XmMEANpWIDTH = tf.clip_by_value(XmMEANpWIDTH, clip_value_min=0, clip_value_max=width) / width
-        MEANpWIDTHmX = tf.clip_by_value(MEANpWIDTHmX, clip_value_min=0, clip_value_max=width) / width
-        RESULT_temp = (XmMEANpWIDTH + MEANpWIDTHmX) - 1
-        List+=[RESULT_temp]
-    
-    RESULT = tf.stack(List, axis=-1)
+    mean,width = self.getMeanWidth(x)
+    RESULT = self.buildResult(x, mean, width)
     
     if self.flatten:
         size=1
         for i in RESULT.shape[1:]: size*=i
         RESULT = tf.reshape(RESULT, (-1, size))
-    
+
     return  RESULT
    
-
+        
     
   def get_config(self):
     config = {'stepSize': self.stepSize}
@@ -175,13 +195,12 @@ tf.Tensor(
           'The innermost dimension of input_shape must be defined, but saw: %s'
           % input_shape)
     if self.flatten:
-        print ("compute_output_shape:",input_shape[:-2].concatenate( input_shape[-2]*len(self.steps) ))
-        return input_shape[:-2].concatenate( input_shape[-2]*len(self.steps) *len(self.sigmas))
+        shape = input_shape[:-2].concatenate( input_shape[-2]*len(self.steps)*len(self.sigmas))
     else:
-        print ("compute_output_shape:",input_shape[:-1].concatenate( len(self.steps),len(self.sigmas) ))  
-        return input_shape[:-1].concatenate( len(self.steps) )
-
-
+        shape = input_shape[:-1].concatenate( len(self.steps) )
+        shape = shape.concatenate( len(self.sigmas) )
+    print ("compute_output_shape:", shape)
+    return shape
 
 
 
